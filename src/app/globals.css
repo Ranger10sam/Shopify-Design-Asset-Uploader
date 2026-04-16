@@ -1,0 +1,33 @@
+@import "@fontsource-variable/manrope";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "tailwindcss";
+
+:root {
+  --background: #eef3ef;
+  --foreground: #0f172a;
+}
+
+html {
+  background:
+    radial-gradient(circle at top left, rgba(125, 211, 252, 0.24), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(16, 185, 129, 0.16), transparent 28%),
+    linear-gradient(180deg, #f7faf7 0%, #eef3ef 100%);
+}
+
+body {
+  color: var(--foreground);
+  background: transparent;
+  font-family: "Manrope Variable", "Aptos", "Segoe UI", sans-serif;
+}
+
+code,
+pre,
+.font-mono {
+  font-family: "IBM Plex Mono", "Cascadia Mono", "Consolas", monospace;
+}
+
+::selection {
+  background: rgba(14, 165, 233, 0.2);
+  color: #020617;
+}
