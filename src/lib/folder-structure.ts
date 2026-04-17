@@ -1,6 +1,7 @@
 import {
+  buildVariantAssetZipName,
   buildSingleAssetZipName,
-  buildSplitAssetZipNames,
+  formatVariantLabel,
   normalizeProductName,
 } from "@/lib/product-name";
 import { normalizeRelativePath } from "@/lib/upload-manifest";
@@ -49,6 +50,16 @@ function getRootFolderNames(paths: string[]): string[] {
   return Array.from(new Set(paths.map((path) => normalizeRelativePath(path).split("/")[0]))).sort(
     (left, right) => left.localeCompare(right),
   );
+}
+
+function findAssetFolderName(
+  productFolderName: string,
+  directories: string[],
+  filePaths: string[],
+): string | null {
+  const directChildFolders = getDirectChildFolders(productFolderName, directories, filePaths);
+
+  return directChildFolders.find((folderName) => folderName.toLowerCase() === "asset") ?? null;
 }
 
 function getDirectChildFolders(
@@ -139,12 +150,13 @@ export function validateFolderStructure(input: StructureInput): ValidationResult
   const [productFolderName] = rootFolderNames;
   const zipNameSourceTitle = input.zipNameSourceTitle?.trim() || productFolderName;
   const normalizedProductName = normalizeProductName(zipNameSourceTitle);
-  const assetFolderPath = `${productFolderName}/asset`;
-  const assetFolderExists =
-    normalizedDirectories.includes(assetFolderPath) ||
-    normalizedFilePaths.some((path) => path.startsWith(`${assetFolderPath}/`));
+  const assetFolderName = findAssetFolderName(
+    productFolderName,
+    normalizedDirectories,
+    normalizedFilePaths,
+  );
 
-  if (!assetFolderExists) {
+  if (!assetFolderName) {
     return {
       ok: false,
       productFolderName,
@@ -154,6 +166,8 @@ export function validateFolderStructure(input: StructureInput): ValidationResult
       ],
     };
   }
+
+  const assetFolderPath = `${productFolderName}/${assetFolderName}`;
 
   const directFiles = getDirectChildFiles(assetFolderPath, normalizedFilePaths);
   const directFolders = getDirectChildFolders(
@@ -197,25 +211,21 @@ export function validateFolderStructure(input: StructureInput): ValidationResult
     };
   }
 
-  const expectedFolders = ["for dark", "for light"];
-  const missingFolders = expectedFolders.filter((folder) => !directFolders.includes(folder));
-  const unexpectedFolders = directFolders.filter((folder) => !expectedFolders.includes(folder));
+  const variantPlans = directFolders.map((folderName) => {
+    const sourceRootRelativePath = `${assetFolderPath}/${folderName}`;
+    const relativeFiles = getFilesUnderPath(sourceRootRelativePath, normalizedFilePaths);
 
-  if (missingFolders.length > 0) {
-    errors.push(
-      missingFolders.length === 2
-        ? "The `asset` folder must contain both `for light` and `for dark` folders."
-        : `Missing required folder inside \`asset\`: \`${missingFolders[0]}\`.`,
-    );
-  }
+    if (relativeFiles.length === 0) {
+      errors.push(`The \`${folderName}\` folder inside \`asset\` must contain at least one file.`);
+    }
 
-  if (unexpectedFolders.length > 0) {
-    errors.push(
-      `Unexpected folder(s) inside \`asset\`: ${unexpectedFolders
-        .map((folder) => `\`${folder}\``)
-        .join(", ")}. Only \`for light\` and \`for dark\` are allowed.`,
-    );
-  }
+    return {
+      zipName: buildVariantAssetZipName(zipNameSourceTitle, folderName),
+      sourceRootRelativePath,
+      relativeFiles,
+      label: formatVariantLabel(folderName),
+    };
+  });
 
   if (errors.length > 0) {
     return {
@@ -225,49 +235,12 @@ export function validateFolderStructure(input: StructureInput): ValidationResult
       errors,
     };
   }
-
-  const lightSourcePath = `${assetFolderPath}/for light`;
-  const darkSourcePath = `${assetFolderPath}/for dark`;
-  const lightFiles = getFilesUnderPath(lightSourcePath, normalizedFilePaths);
-  const darkFiles = getFilesUnderPath(darkSourcePath, normalizedFilePaths);
-
-  if (lightFiles.length === 0) {
-    errors.push("The `for light` folder must contain at least one file.");
-  }
-
-  if (darkFiles.length === 0) {
-    errors.push("The `for dark` folder must contain at least one file.");
-  }
-
-  if (errors.length > 0) {
-    return {
-      ok: false,
-      productFolderName,
-      normalizedProductName,
-      errors,
-    };
-  }
-
-  const [lightZipName, darkZipName] = buildSplitAssetZipNames(zipNameSourceTitle);
 
   return {
     ok: true,
     productFolderName,
     normalizedProductName,
     mode: "split",
-    zipPlans: [
-      {
-        zipName: lightZipName,
-        sourceRootRelativePath: lightSourcePath,
-        relativeFiles: lightFiles,
-        label: "For light",
-      },
-      {
-        zipName: darkZipName,
-        sourceRootRelativePath: darkSourcePath,
-        relativeFiles: darkFiles,
-        label: "For dark",
-      },
-    ],
+    zipPlans: variantPlans,
   };
 }

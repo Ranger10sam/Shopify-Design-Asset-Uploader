@@ -1,7 +1,11 @@
 import type { ProcessStreamEvent } from "@/lib/process-events";
 import { getServerEnv } from "@/lib/env";
 import { logError } from "@/lib/server/logger";
-import { processUpload, UploadValidationError } from "@/lib/server/process-upload";
+import {
+  processUpload,
+  UploadCancelledError,
+  UploadValidationError,
+} from "@/lib/server/process-upload";
 import { parseUploadManifest } from "@/lib/upload-manifest";
 
 export const runtime = "nodejs";
@@ -82,7 +86,15 @@ export async function POST(request: Request): Promise<Response> {
 
       void (async () => {
         try {
-          const result = await processUpload({ manifest, filesById, productTitleOverride }, emit);
+          const result = await processUpload(
+            {
+              manifest,
+              filesById,
+              productTitleOverride,
+              abortSignal: request.signal,
+            },
+            emit,
+          );
 
           emit({
             type: "success",
@@ -96,6 +108,8 @@ export async function POST(request: Request): Promise<Response> {
               type: "validation-error",
               errors: error.errors,
             });
+          } else if (error instanceof UploadCancelledError) {
+            return;
           } else {
             emit({
               type: "error",

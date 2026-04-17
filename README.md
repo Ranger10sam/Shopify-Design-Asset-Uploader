@@ -17,7 +17,7 @@ Internal Next.js app for validating a designer's product folder, generating the 
 
 1. Accepts exactly one product folder.
 2. Validates the folder structure strictly.
-3. Detects whether the upload is a single asset set or a split light/dark asset set.
+3. Detects whether the upload is a single asset set or a multi-variant asset set.
 4. Shows the exact zip filename(s) before upload.
 5. Generates the zip file(s) on the server.
 6. Uploads the generated zip file(s) to S3.
@@ -96,7 +96,8 @@ npm run build
 
 ## Accepted Folder Structure
 
-Upload one product folder. The app only uses the `asset` folder for packaging logic.
+Upload one product folder. The app only uses the `asset` folder for packaging logic, and the
+folder name is matched case-insensitively, so `asset` and `ASSET` are both accepted.
 
 ### Case A: Single asset case
 
@@ -117,14 +118,12 @@ Output:
 Army_Origin_T--Shirt.zip
 ```
 
-### Case B: Split asset case
+### Case B: Multi-variant asset case
 
-The `asset` folder contains exactly these two subfolders and no loose files:
+The `asset` folder contains one or more subfolders and no loose files.
 
-- `for light`
-- `for dark`
-
-Both folders must exist and both must contain at least one file.
+Every immediate subfolder inside `asset` becomes its own zip output.
+Each variant folder must contain at least one file.
 
 ```text
 Army Origin T-Shirt/
@@ -133,7 +132,7 @@ Army Origin T-Shirt/
 │  │  ├─ front.png
 │  │  └─ nested/
 │  │     └─ detail.png
-│  └─ for dark/
+│  └─ for navy blue/
 │     └─ front.png
 └─ mockups/
 ```
@@ -142,7 +141,7 @@ Output:
 
 ```text
 Army_Origin_T--Shirt_For_Light.zip
-Army_Origin_T--Shirt_For_Dark.zip
+Army_Origin_T--Shirt_For_Navy_Blue.zip
 ```
 
 ## Naming Rules
@@ -165,10 +164,7 @@ Army Origin T-Shirt -> Army_Origin_T--Shirt.zip
 - Missing `asset` folder
 - Empty `asset` folder
 - `asset` contains both loose files and subfolders
-- Wrong split folder names such as `light`, `dark`, `Light`, `Dark`, or `for_light`
-- Only one of `for light` or `for dark` exists
-- Extra folders directly inside `asset`
-- `for light` or `for dark` exists but contains no files
+- A variant folder inside `asset` exists but contains no files
 
 ## Browser Notes
 

@@ -17,10 +17,18 @@ export class UploadValidationError extends Error {
   }
 }
 
+export class UploadCancelledError extends Error {
+  constructor() {
+    super("Upload processing was cancelled before S3 upload started.");
+    this.name = "UploadCancelledError";
+  }
+}
+
 interface ProcessUploadInput {
   manifest: UploadManifest;
   filesById: Map<string, File>;
   productTitleOverride?: string;
+  abortSignal?: AbortSignal;
 }
 
 interface ProcessUploadResult {
@@ -44,12 +52,15 @@ async function writeUploadToTemporaryDirectory(
   tempDirectory: string,
   manifest: UploadManifest,
   filesById: Map<string, File>,
+  abortSignal?: AbortSignal,
 ): Promise<void> {
   for (const directory of manifest.directories) {
+    assertNotAborted(abortSignal);
     await mkdir(resolveWithin(tempDirectory, directory), { recursive: true });
   }
 
   for (const fileEntry of manifest.files) {
+    assertNotAborted(abortSignal);
     const file = filesById.get(fileEntry.id);
 
     if (!file) {
@@ -66,6 +77,12 @@ async function writeUploadToTemporaryDirectory(
   }
 }
 
+function assertNotAborted(abortSignal?: AbortSignal): void {
+  if (abortSignal?.aborted) {
+    throw new UploadCancelledError();
+  }
+}
+
 export async function processUpload(
   input: ProcessUploadInput,
   onEvent: (event: ProcessStreamEvent) => void,
@@ -78,6 +95,7 @@ export async function processUpload(
   });
 
   try {
+    assertNotAborted(input.abortSignal);
     onEvent({
       type: "progress",
       step: "validating",
@@ -94,8 +112,14 @@ export async function processUpload(
       throw new UploadValidationError(validationResult.errors);
     }
 
-    await writeUploadToTemporaryDirectory(tempDirectory, input.manifest, input.filesById);
+    await writeUploadToTemporaryDirectory(
+      tempDirectory,
+      input.manifest,
+      input.filesById,
+      input.abortSignal,
+    );
 
+    assertNotAborted(input.abortSignal);
     onEvent({
       type: "progress",
       step: "preparing",
@@ -106,6 +130,7 @@ export async function processUpload(
     const preparedArtifacts = [];
 
     for (const zipPlan of validationResult.zipPlans) {
+      assertNotAborted(input.abortSignal);
       const sourceRootDirectory = resolveWithin(tempDirectory, zipPlan.sourceRootRelativePath);
       const localZipPath = await createZipFromPlan({
         outputDirectory,
@@ -120,6 +145,7 @@ export async function processUpload(
       });
     }
 
+    assertNotAborted(input.abortSignal);
     onEvent({
       type: "progress",
       step: "uploading",
@@ -134,9 +160,15 @@ export async function processUpload(
       items: uploadedArtifacts,
     };
   } catch (error) {
-    logError("Upload processing failed.", {
-      error,
-    });
+    if (error instanceof UploadCancelledError) {
+      logInfo("Upload processing cancelled before S3 upload started.", {
+        tempDirectory,
+      });
+    } else {
+      logError("Upload processing failed.", {
+        error,
+      });
+    }
     throw error;
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });

@@ -15,7 +15,7 @@ describe("validateFolderStructure", () => {
     expect(result.ok).toBe(true);
     expect(result).toMatchObject({
       mode: "single",
-      zipPlans: [{ zipName: "Army_Origin_T--Shirt.zip" }],
+      zipPlans: [{ zipName: "ARMY_ORIGIN_T--SHIRT.zip" }],
     });
   });
 
@@ -32,8 +32,8 @@ describe("validateFolderStructure", () => {
     expect(result.ok).toBe(true);
     expect(result).toMatchObject({
       productFolderName: "Army Origin T-Shirt",
-      normalizedProductName: "Army_Camo_Tactical",
-      zipPlans: [{ zipName: "Army_Camo_Tactical.zip" }],
+      normalizedProductName: "ARMY_CAMO_TACTICAL",
+      zipPlans: [{ zipName: "ARMY_CAMO_TACTICAL.zip" }],
     });
   });
 
@@ -42,14 +42,14 @@ describe("validateFolderStructure", () => {
       filePaths: [
         "Army Origin T-Shirt/asset/for light/front.png",
         "Army Origin T-Shirt/asset/for light/subdir/detail.png",
-        "Army Origin T-Shirt/asset/for dark/front.png",
+        "Army Origin T-Shirt/asset/for navy blue/front.png",
       ],
       directories: [
         "Army Origin T-Shirt",
         "Army Origin T-Shirt/asset",
         "Army Origin T-Shirt/asset/for light",
         "Army Origin T-Shirt/asset/for light/subdir",
-        "Army Origin T-Shirt/asset/for dark",
+        "Army Origin T-Shirt/asset/for navy blue",
       ],
     });
 
@@ -58,14 +58,27 @@ describe("validateFolderStructure", () => {
       mode: "split",
       zipPlans: [
         {
-          zipName: "Army_Origin_T--Shirt_For_Light.zip",
+          zipName: "ARMY_ORIGIN_T--SHIRT_FOR_LIGHT.zip",
           relativeFiles: ["front.png", "subdir/detail.png"],
         },
         {
-          zipName: "Army_Origin_T--Shirt_For_Dark.zip",
+          zipName: "ARMY_ORIGIN_T--SHIRT_FOR_NAVY_BLUE.zip",
           relativeFiles: ["front.png"],
         },
       ],
+    });
+  });
+
+  it("accepts an uppercase asset folder name", () => {
+    const result = validateFolderStructure({
+      filePaths: ["Army Origin T-Shirt/ASSET/front.png"],
+      directories: ["Army Origin T-Shirt", "Army Origin T-Shirt/ASSET"],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({
+      mode: "single",
+      zipPlans: [{ zipName: "ARMY_ORIGIN_T--SHIRT.zip" }],
     });
   });
 
@@ -100,39 +113,44 @@ describe("validateFolderStructure", () => {
     );
   });
 
-  it("rejects incorrect split folder names", () => {
+  it("accepts any asset subfolder names as separate variants", () => {
     const result = validateFolderStructure({
       filePaths: [
         "Army Origin T-Shirt/asset/light/front.png",
-        "Army Origin T-Shirt/asset/dark/front.png",
+        "Army Origin T-Shirt/asset/sand/front.png",
       ],
       directories: [
         "Army Origin T-Shirt",
         "Army Origin T-Shirt/asset",
         "Army Origin T-Shirt/asset/light",
-        "Army Origin T-Shirt/asset/dark",
+        "Army Origin T-Shirt/asset/sand",
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({
+      mode: "split",
+      zipPlans: [
+        { zipName: "ARMY_ORIGIN_T--SHIRT_LIGHT.zip" },
+        { zipName: "ARMY_ORIGIN_T--SHIRT_SAND.zip" },
+      ],
+    });
+  });
+
+  it("rejects empty variant folders", () => {
+    const result = validateFolderStructure({
+      filePaths: ["Army Origin T-Shirt/asset/for sand/front.png"],
+      directories: [
+        "Army Origin T-Shirt",
+        "Army Origin T-Shirt/asset",
+        "Army Origin T-Shirt/asset/for navy blue",
+        "Army Origin T-Shirt/asset/for sand",
       ],
     });
 
     expect(result.ok).toBe(false);
     expect(result.errors).toContain(
-      "The `asset` folder must contain both `for light` and `for dark` folders.",
+      "The `for navy blue` folder inside `asset` must contain at least one file.",
     );
-    expect(result.errors[1]).toContain("Unexpected folder(s) inside `asset`");
-  });
-
-  it("rejects empty light or dark folders", () => {
-    const result = validateFolderStructure({
-      filePaths: ["Army Origin T-Shirt/asset/for dark/front.png"],
-      directories: [
-        "Army Origin T-Shirt",
-        "Army Origin T-Shirt/asset",
-        "Army Origin T-Shirt/asset/for light",
-        "Army Origin T-Shirt/asset/for dark",
-      ],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.errors).toContain("The `for light` folder must contain at least one file.");
   });
 });

@@ -20,6 +20,7 @@ import {
   RefreshCcw,
   ShieldCheck,
   Sparkles,
+  X,
 } from "lucide-react";
 
 import { ResultCard } from "@/components/result-card";
@@ -36,7 +37,14 @@ import { validateFolderStructure } from "@/lib/folder-structure";
 import { normalizeProductName } from "@/lib/product-name";
 import type { ProcessStreamEvent, UploadResultItem } from "@/lib/process-events";
 
-type ProcessingStage = "idle" | "submitting" | "preparing" | "uploading" | "success" | "error";
+type ProcessingStage =
+  | "idle"
+  | "submitting"
+  | "preparing"
+  | "uploading"
+  | "success"
+  | "error"
+  | "cancelled";
 
 interface SelectionState extends SelectedFolder {
   validation: ValidationSuccess | ValidationFailure;
@@ -50,7 +58,11 @@ interface LiveProcessStep {
 }
 
 function getModeLabel(mode: ValidationSuccess["mode"]): string {
-  return mode === "single" ? "Single asset set" : "Split light/dark asset set";
+  return mode === "single" ? "Single asset set" : "Multi-variant asset set";
+}
+
+function isPreUploadStage(stage: ProcessingStage): boolean {
+  return stage === "submitting" || stage === "preparing";
 }
 
 function getStepStatuses(
@@ -87,6 +99,10 @@ function getStepStatuses(
     prepareStatus = "error";
   }
 
+  if (stage === "cancelled" && selection?.validation.ok) {
+    prepareStatus = "error";
+  }
+
   return [uploadStatus, validationStatus, prepareStatus, uploadToS3Status, resultsStatus];
 }
 
@@ -102,6 +118,8 @@ function getStatusHeading(stage: ProcessingStage): string {
       return "Ready to copy the final URLs";
     case "error":
       return "Processing stopped";
+    case "cancelled":
+      return "Processing cancelled before upload";
     default:
       return "Waiting for a product folder";
   }
@@ -121,6 +139,8 @@ function getProgressValue(stage: ProcessingStage, hasResults: boolean): number {
       return 82;
     case "error":
       return 100;
+    case "cancelled":
+      return 42;
     default:
       return 0;
   }
@@ -128,6 +148,7 @@ function getProgressValue(stage: ProcessingStage, hasResults: boolean): number {
 
 function getLiveProcessSteps(stage: ProcessingStage, hasResults: boolean): LiveProcessStep[] {
   const processFailed = stage === "error";
+  const processCancelled = stage === "cancelled";
 
   return [
     {
@@ -137,6 +158,8 @@ function getLiveProcessSteps(stage: ProcessingStage, hasResults: boolean): LiveP
         stage === "idle"
           ? "pending"
           : processFailed
+            ? "error"
+            : processCancelled
             ? "error"
             : "complete",
     },
@@ -148,7 +171,7 @@ function getLiveProcessSteps(stage: ProcessingStage, hasResults: boolean): LiveP
           ? "active"
           : stage === "uploading" || stage === "success" || hasResults
             ? "complete"
-            : processFailed
+            : processFailed || processCancelled
               ? "error"
               : "pending",
     },
@@ -160,7 +183,7 @@ function getLiveProcessSteps(stage: ProcessingStage, hasResults: boolean): LiveP
           ? "active"
           : stage === "success" || hasResults
             ? "complete"
-            : processFailed
+            : processFailed || processCancelled
               ? "error"
               : "pending",
     },
@@ -168,7 +191,11 @@ function getLiveProcessSteps(stage: ProcessingStage, hasResults: boolean): LiveP
       title: "Deliver final URLs",
       description: "Return copy-ready public links for your spreadsheet workflow.",
       state:
-        stage === "success" || hasResults ? "active" : processFailed ? "error" : "pending",
+        stage === "success" || hasResults
+          ? "active"
+          : processFailed || processCancelled
+            ? "error"
+            : "pending",
     },
   ];
 }
@@ -221,11 +248,12 @@ function hasDirectoryPicker(
 
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const processAbortControllerRef = useRef<AbortController | null>(null);
+  const cancelRequestedRef = useRef(false);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const [stage, setStage] = useState<ProcessingStage>("idle");
   const [isDragging, setIsDragging] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
-  const [processNotes, setProcessNotes] = useState<string[]>([]);
   const [errorMessages, setErrorMessages] = useState<string[]>([]);
   const [results, setResults] = useState<UploadResultItem[]>([]);
 
@@ -263,7 +291,6 @@ export default function Home() {
       setSelection(nextSelection);
       setStage("idle");
       setResults([]);
-      setProcessNotes([]);
       setErrorMessages(nextSelection.validation.ok ? [] : nextSelection.validation.errors);
       setIsBusy(false);
     });
@@ -278,18 +305,19 @@ export default function Home() {
       const nextSelection = buildSelectionState(currentSelection, nextTitle);
       setResults([]);
       setStage("idle");
-      setProcessNotes([]);
       setErrorMessages(nextSelection.validation.ok ? [] : nextSelection.validation.errors);
       return nextSelection;
     });
   }
 
   function resetAll(): void {
+    processAbortControllerRef.current?.abort();
+    processAbortControllerRef.current = null;
+    cancelRequestedRef.current = false;
     setSelection(null);
     setStage("idle");
     setIsBusy(false);
     setIsDragging(false);
-    setProcessNotes([]);
     setErrorMessages([]);
     setResults([]);
 
@@ -372,7 +400,6 @@ export default function Home() {
 
   function handleStreamEvent(event: ProcessStreamEvent): void {
     if (event.type === "progress") {
-      setProcessNotes((currentNotes) => [...currentNotes, event.message]);
       setStage(event.step === "uploading" ? "uploading" : "preparing");
       return;
     }
@@ -395,6 +422,22 @@ export default function Home() {
     setResults(event.items);
     setErrorMessages([]);
     setIsBusy(false);
+    processAbortControllerRef.current = null;
+    cancelRequestedRef.current = false;
+  }
+
+  function handleCancelProcessing(): void {
+    if (!isBusy || !isPreUploadStage(stage)) {
+      return;
+    }
+
+    cancelRequestedRef.current = true;
+    processAbortControllerRef.current?.abort();
+    processAbortControllerRef.current = null;
+    setStage("cancelled");
+    setIsBusy(false);
+    setErrorMessages([]);
+    setResults([]);
   }
 
   async function handleProcess(): Promise<void> {
@@ -404,9 +447,12 @@ export default function Home() {
 
     setIsBusy(true);
     setStage("submitting");
-    setProcessNotes(["Sending folder contents to the server."]);
     setErrorMessages([]);
     setResults([]);
+    cancelRequestedRef.current = false;
+
+    const abortController = new AbortController();
+    processAbortControllerRef.current = abortController;
 
     const formData = new FormData();
     formData.append(
@@ -430,6 +476,7 @@ export default function Home() {
       const response = await fetch("/api/process", {
         method: "POST",
         body: formData,
+        signal: abortController.signal,
       });
 
       if (!response.ok) {
@@ -469,6 +516,17 @@ export default function Home() {
         handleStreamEvent(JSON.parse(buffer) as ProcessStreamEvent);
       }
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        if (cancelRequestedRef.current) {
+          setStage("cancelled");
+          setIsBusy(false);
+          setErrorMessages([]);
+          setResults([]);
+        }
+
+        return;
+      }
+
       setStage("error");
       setErrorMessages([
         error instanceof Error
@@ -476,6 +534,9 @@ export default function Home() {
           : "The request failed unexpectedly. Please try again.",
       ]);
       setIsBusy(false);
+    } finally {
+      processAbortControllerRef.current = null;
+      cancelRequestedRef.current = false;
     }
   }
 
@@ -801,11 +862,7 @@ export default function Home() {
                       </div>
                     </div>
 
-                    <div
-                      className={`mt-6 grid gap-5 ${
-                        results.length > 1 ? "xl:grid-cols-2" : "grid-cols-1"
-                      }`}
-                    >
+                    <div className="mt-6 grid grid-cols-1 gap-5">
                       {results.map((item) => (
                         <ResultCard key={item.s3Key} item={item} />
                       ))}
@@ -930,30 +987,11 @@ export default function Home() {
                   })}
                 </div>
 
-                <div className="mt-6 rounded-[28px] border border-slate-200 bg-slate-50/80 p-5">
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
-                    Live event log
-                  </p>
-                  <div className="mt-4 space-y-3">
-                    {processNotes.length > 0 ? (
-                      processNotes.map((note, index) => (
-                        <div
-                          key={`${note}-${index}`}
-                          className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700"
-                        >
-                          <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600">
-                            {index + 1}
-                          </span>
-                          <span>{note}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="rounded-3xl border border-dashed border-slate-200 px-4 py-6 text-sm leading-7 text-slate-500">
-                        Process notes will appear here once the folder is being handled.
-                      </div>
-                    )}
+                {isPreUploadStage(stage) ? (
+                  <div className="mt-6 rounded-[28px] border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-900">
+                    You can still cancel now. Once S3 upload starts, the run must finish.
                   </div>
-                </div>
+                ) : null}
               </section>
 
               <section className="rounded-[32px] border border-slate-200/80 bg-white/85 p-7 shadow-[0_24px_70px_-45px_rgba(15,23,42,0.38)]">
@@ -970,10 +1008,22 @@ export default function Home() {
                     {isBusy ? "Processing..." : "Generate zip(s) and upload"}
                   </button>
 
+                  {isPreUploadStage(stage) ? (
+                    <button
+                      type="button"
+                      onClick={handleCancelProcessing}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-3 text-sm font-medium text-rose-800 transition hover:border-rose-300 hover:bg-rose-100"
+                    >
+                      <X className="h-4 w-4" />
+                      Cancel before upload starts
+                    </button>
+                  ) : null}
+
                   <button
                     type="button"
                     onClick={resetAll}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 px-5 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                    disabled={isBusy}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 px-5 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     <RefreshCcw className="h-4 w-4" />
                     Reset and process another folder
